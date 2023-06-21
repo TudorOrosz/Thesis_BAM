@@ -1,0 +1,194 @@
+---
+title: "Pre-processing"
+output: html_notebook
+Note: This notebook contains a manipulation of the 3 datasets, leads, contacts, and marketing.
+---
+
+# Intial manipulations
+
+## Libraries 
+```{r}
+library(tidyr)
+library(dplyr)
+library("readr")
+```
+
+## Read CSV's
+```{r}
+tudor_leads <- read_csv("Extracted data Aaron/tudor_leads.csv")
+tudor_export_contacts <- read_csv("Extracted data Aaron/tudor_export_contacts.csv")
+tudor_marketing_events <- read_csv("Extracted data Aaron/tudor_marketing_events.csv")
+```
+
+## Rename datasets
+```{r}
+leads <- tudor_leads
+contacts <- tudor_export_contacts
+marketing <- tudor_marketing_events
+```
+
+## De-duplicate contacts dataframe
+```{r}
+# Proof that it contains duplicates and visualization of dataframe with these
+duplicates <- contacts[duplicated(contacts$contact_id),]
+
+# De-duplication
+contacts <- contacts %>% distinct(contact_id, .keep_all = TRUE)
+```
+
+## Pre-process column opportunityid from contacts
+```{r}
+contacts$opportunityid <- ifelse(is.na(contacts$opportunityid), 0, 1)
+```
+
+## Summary stats on opoortunityid
+```{r}
+table(contacts$opportunityid)
+17033/ (17033+82928)
+17033+82928
+```
+
+# Marketing
+
+## Manipulating marketing_events database
+
+### Unique combinations marketing events
+```{r}
+# Use the unique() function to get distinct combinations of activity_type and new_status
+distinct_combinations <- unique(marketing[c("activity_type", "new_status")])
+# Print the results
+print(distinct_combinations)
+```
+
+### Adding up marketing events
+```{r}
+# here I am dding up marketing events, this is the mistake that I made, since I got 0 or 1 only for marketing events. Actually, I should have done the same that Aaaron did with platform events
+# but first, I need to deduplicate it, based on the 4 columns date, lead id and the two unique identifiers
+marketing_subset <- marketing[, c(2, 3, 5, 6)]
+
+# Count the number of duplicate rows in the marketing data set
+n_duplicates <- sum(duplicated(marketing_subset))
+cat("The marketing data set has", n_duplicates, "duplicate rows.\n")
+
+# Remove duplicates from the subsetted data frame
+marketing_subset_unique <- marketing_subset[!duplicated(marketing_subset), ]
+
+# now I can add up the events, and get rid of time column
+# Aggregate the data
+aggregated_data <- marketing_subset_unique %>%
+  group_by(leadorcontactid, activity_type, new_status) %>%
+  summarise(num_occurrences = n()) %>%
+  ungroup()
+
+# View the aggregated data
+print(aggregated_data)
+
+# Rename dataframe to marketing_subset_unique so that I don't have to change everything again
+marketing_subset_unique <- aggregated_data
+```
+
+### Now we do the pivot, when there are no more duplicates
+```{r}
+wide_data <- pivot_wider(data = marketing_subset_unique, 
+                         id_cols = leadorcontactid, 
+                         names_from = c(activity_type, new_status), 
+                         values_from = num_occurrences, 
+                         #values_fill = list(flag = as.list(integer(1))), 
+                         names_sep = "_")
+
+# Replace missing values in columns 2 to 51 of wide_table with 0's
+wide_data[, 2:51][is.na(wide_data[, 2:51])] <- 0
+```
+
+### Merging wide marketing dataset with the leads and contacts tables and summary stats
+```{r}
+# -- merging with leads
+
+# Merge the two data frames using a left join on the "lead_id" column
+marketing_merged_leads <- merge(leads, wide_data, by.x = "lead_id", by.y = "leadorcontactid", all.x = TRUE)
+
+# Count the number of rows with NAs in columns 11-60 of marketing_merged_leads
+na_count <- sum(rowSums(is.na(marketing_merged_leads[, 11:60])) > 0)
+cat("There are", na_count, "observations with NAs in columns 11-60 of marketing_merged_leads.\n")
+
+# Count the number of rows with NAs that come due to accounts
+na_count <- sum(rowSums(is.na(marketing_merged_leads[, 2:9])) > 0)
+cat("There are", na_count, "observations with NAs due to accounts out of", nrow(marketing_merged_leads))
+
+# Count the number of rows with NAs that come due to both platform and accounts
+na_count <- sum(rowSums(is.na(marketing_merged_leads[, 2:60])) > 0)
+na_count
+
+# Percentage of completion taking in consideration accounts and platform_events merging
+cat("precentage completion leads:", (1-na_count/nrow(marketing_merged_leads))*100)
+
+# -- merging with contacts
+
+# Merge the two data frames using a left join on the "contact_id" column
+marketing_merged_contacts <- merge(contacts, wide_data, by.x = "contact_id", by.y = "leadorcontactid", all.x = TRUE)
+
+# Count the number of rows with NAs in columns 11-60 of marketing_merged_contacts
+na_count <- sum(rowSums(is.na(marketing_merged_contacts[, 12:61])) > 0)
+cat("There are", na_count, "observations with NAs in columns 12-61 of marketing_merged_contacts.\n")
+
+# Count the number of rows with NAs that come due to accounts
+na_count <- sum(rowSums(is.na(marketing_merged_contacts[, 2:9])) > 0)
+cat("There are", na_count, "observations with NAs due to accounts out of", nrow(marketing_merged_contacts))
+
+# Count the number of rows with NAs that come due to both platform and accounts
+na_count <- sum(rowSums(is.na(marketing_merged_contacts[, 2:61])) > 0)
+na_count
+
+# Percentage of completion taking in consideration accounts and marketing_events merging
+cat("precentage completion contacts:", (1-na_count/nrow(marketing_merged_contacts))*100)
+```
+
+## Finalizing
+
+### Finally subsetting for NA's for both leads and contacts
+```{r}
+# -- leads
+subset_marketing_merged_leads <- marketing_merged_leads[complete.cases(marketing_merged_leads),]
+
+# -- contacts
+subset_marketing_merged_contacts <- marketing_merged_contacts[complete.cases(marketing_merged_contacts),]
+```
+
+### Analyzing opportunityid
+```{r}
+#-> count how many opportunityid have 1 and 0
+table(subset_marketing_merged_contacts$opportunityid)
+```
+
+### Merging leads and contacts tables
+```{r}
+# First create opportunityid column for lead table
+subset_marketing_merged_leads <- subset_marketing_merged_leads %>%
+  mutate(opportunityid = 0) %>% # create new column opportunityid with value 0
+  select(1:10, opportunityid, 11:ncol(subset_marketing_merged_leads)) # move the new column to the 11th position
+
+# Merge leads and contacts
+
+# First rename first column from each dataset
+subset_marketing_merged_leads <- subset_marketing_merged_leads %>%
+  rename(id = lead_id)
+
+subset_marketing_merged_contacts <- subset_marketing_merged_contacts %>%
+  rename(id = contact_id)
+
+# check if column names are equal
+all(names(subset_marketing_merged_leads) == names(subset_marketing_merged_contacts))
+
+# Concatenate the two
+if(all(names(subset_marketing_merged_leads) == names(subset_marketing_merged_contacts))) {
+  combined_df <- rbind(subset_marketing_merged_leads, subset_marketing_merged_contacts)
+} else {
+  # if the column names and order are not the same, show an error message
+  stop("Column names or order are not the same for both data frames.")
+}
+```
+
+## Export dataframe only containing marketing
+```{r}
+write.csv(combined_df, file = "dataset_marketing.csv", row.names = FALSE)
+```
