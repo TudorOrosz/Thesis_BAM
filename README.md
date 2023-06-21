@@ -8,3 +8,5 @@ This repository is designated to host the code used for my thesis, for the purpo
 
 The final three jupyter notebooks are designating to tuning, training and testing the prediction models.
 
+For questions, please contact me at tudororosz@gmail.com.
+
